@@ -88,6 +88,8 @@ const DEFAULT_PINS = {
   9: "0009", 10: "0010", 11: "0011", 12: "0012",
 };
 
+const APPROVE_PIN = "6274";
+
 function haversineDistance(lat1, lon1, lat2, lon2) {
   const R = 6371000;
   const dLat = (lat2 - lat1) * Math.PI / 180;
@@ -1019,6 +1021,8 @@ function PendingEditsPanel({ dateKey, approverEmpId, showToast, onClose }) {
   const [loading, setLoading] = useState(true);
   const [rejectingKey, setRejectingKey] = useState(null);
   const [rejectReason, setRejectReason] = useState("");
+  const [approvingKey, setApprovingKey] = useState(null);
+  const [approvePin, setApprovePin] = useState("");
 
   useEffect(() => {
     if (!firebaseReady || !db) { setLoading(false); return; }
@@ -1039,8 +1043,15 @@ function PendingEditsPanel({ dateKey, approverEmpId, showToast, onClose }) {
   }, [dateKey]);
 
   const handleApprove = (req) => {
+    if (approvePin !== APPROVE_PIN) {
+      showToast("PIN อนุมัติไม่ถูกต้อง", "error");
+      setApprovePin("");
+      return;
+    }
     approveEditRequest(dateKey, req.parentEmpId, req.key, approverEmpId, req.changes);
     showToast(`อนุมัติแก้ไขเวลา ${req.empName} แล้ว`, "success");
+    setApprovingKey(null);
+    setApprovePin("");
   };
 
   const handleReject = (req) => {
@@ -1081,8 +1092,9 @@ function PendingEditsPanel({ dateKey, approverEmpId, showToast, onClose }) {
             const requestedByEmp = EMPLOYEES.find(e => e.id === req.requestedBy);
             const badge = statusBadge(req.status);
             const isRejecting = rejectingKey === req.key;
+            const isApproving = approvingKey === req.key;
             return (
-              <div key={req.key} style={{ background: T.bg, borderRadius: "14px", padding: "16px", marginBottom: "10px", border: `1px solid ${T.accent}40` }}>
+              <div key={req.key} style={{ background: T.bg, borderRadius: "14px", padding: "16px", marginBottom: "10px", border: `1px solid ${isApproving ? T.green : T.accent}40` }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px" }}>
                   <div>
                     <span style={{ fontSize: "15px", fontWeight: 800, color: T.text }}>{req.empName}</span>
@@ -1105,8 +1117,26 @@ function PendingEditsPanel({ dateKey, approverEmpId, showToast, onClose }) {
                 ))}
                 <div style={{ fontSize: "11px", color: T.textDim, marginTop: "8px" }}>{new Date(req.requestedAt).toLocaleString("th-TH")}</div>
 
+                {/* Approve PIN input */}
+                {isApproving && (
+                  <div style={{ marginTop: "12px", background: `${T.green}08`, borderRadius: "12px", padding: "14px", border: `1px solid ${T.green}30` }}>
+                    <div style={{ fontSize: "13px", fontWeight: 700, color: T.green, marginBottom: "8px" }}>🔐 ใส่ PIN อนุมัติ</div>
+                    <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
+                      <input type="tel" inputMode="numeric" pattern="[0-9]*" maxLength={4} placeholder="PIN 4 หลัก"
+                        value={approvePin} onChange={e => setApprovePin(e.target.value.replace(/\D/g, "").slice(0, 4))} autoFocus
+                        style={{ flex: 1, padding: "12px 14px", borderRadius: "10px", border: `2px solid ${T.green}60`, background: T.card, color: T.text, fontSize: "20px", fontWeight: 800, fontFamily: "monospace", textAlign: "center", letterSpacing: "8px", outline: "none" }} />
+                    </div>
+                    <div style={{ display: "flex", gap: "6px", marginTop: "10px" }}>
+                      <button onClick={() => { setApprovingKey(null); setApprovePin(""); }}
+                        style={{ flex: 1, padding: "10px", borderRadius: "8px", border: `1px solid ${T.border}`, background: "transparent", color: T.textMuted, fontSize: "12px", fontWeight: 700, cursor: "pointer" }}>ยกเลิก</button>
+                      <button onClick={() => handleApprove(req)} disabled={approvePin.length !== 4}
+                        style={{ flex: 1.5, padding: "10px", borderRadius: "8px", border: "none", background: approvePin.length === 4 ? `linear-gradient(135deg, ${T.green}, #166534)` : T.border, color: approvePin.length === 4 ? "#fff" : T.textDim, fontSize: "12px", fontWeight: 800, cursor: approvePin.length === 4 ? "pointer" : "default" }}>✓ ยืนยันอนุมัติ</button>
+                    </div>
+                  </div>
+                )}
+
                 {/* Reject reason input */}
-                {isRejecting && (
+                {isRejecting && !isApproving && (
                   <div style={{ marginTop: "10px" }}>
                     <input type="text" placeholder="เหตุผลที่ปฏิเสธ..." value={rejectReason} onChange={e => setRejectReason(e.target.value)}
                       style={{ width: "100%", padding: "10px 12px", borderRadius: "8px", border: `1px solid ${T.border}`, background: T.card, color: T.text, fontSize: "13px", outline: "none" }} />
@@ -1118,13 +1148,13 @@ function PendingEditsPanel({ dateKey, approverEmpId, showToast, onClose }) {
                 )}
 
                 {/* Action buttons */}
-                {!isRejecting && (
+                {!isApproving && !isRejecting && (
                   <div style={{ display: "flex", gap: "8px", marginTop: "12px" }}>
-                    <button onClick={() => { setRejectingKey(req.key); setRejectReason(""); }} style={{
+                    <button onClick={() => { setRejectingKey(req.key); setRejectReason(""); setApprovingKey(null); }} style={{
                       flex: 1, padding: "10px", borderRadius: "10px", border: `1px solid ${T.red}40`,
                       background: `${T.red}15`, color: T.red, fontSize: "13px", fontWeight: 700, cursor: "pointer",
                     }}>✕ ปฏิเสธ</button>
-                    <button onClick={() => handleApprove(req)} style={{
+                    <button onClick={() => { setApprovingKey(req.key); setApprovePin(""); setRejectingKey(null); }} style={{
                       flex: 1, padding: "10px", borderRadius: "10px", border: "none",
                       background: `linear-gradient(135deg, ${T.green}, #166534)`, color: "#fff",
                       fontSize: "13px", fontWeight: 800, cursor: "pointer",
