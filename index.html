@@ -1,0 +1,660 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#111111">
+<title>Cannes &amp; Co. Time Stamp</title>
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⏱️</text></svg>">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #111; color: #e8e8e8; min-height: 100dvh; }
+  button { font-family: inherit; }
+  @keyframes slideIn { from { transform: translateY(-20px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+  @keyframes pulse { 0%,100% { opacity:1 } 50% { opacity:0.6 } }
+  @keyframes fadeIn { from { opacity:0; transform:scale(0.95) } to { opacity:1; transform:scale(1) } }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<!-- React 18 -->
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+
+<!-- Firebase 10 Compat -->
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-database-compat.js"></script>
+
+<!-- Babel Standalone for JSX -->
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+<script type="text/babel" data-type="module">
+const { useState, useEffect, useCallback, useMemo, useRef } = React;
+
+// ══════════════════════════════════════════════════════════════
+// 🔥 FIREBASE CONFIG — ใส่ค่าจาก Firebase Console ตรงนี้
+// ══════════════════════════════════════════════════════════════
+const firebaseConfig = {
+  apiKey: "AIzaSyA40MA7EW5C27_zYRbo7P0RbrdGFuIqPP0",
+  authDomain: "cannes-timestamp.firebaseapp.com",
+  databaseURL: "https://cannes-timestamp-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: "cannes-timestamp",
+  storageBucket: "cannes-timestamp.firebasestorage.app",
+  messagingSenderId: "113347803691",
+  appId: "1:113347803691:web:c905ca9fb471f65289886e"
+};
+
+let db = null;
+let firebaseReady = false;
+try {
+  firebase.initializeApp(firebaseConfig);
+  db = firebase.database();
+  firebaseReady = !firebaseConfig.apiKey.includes("YOUR_");
+} catch (e) {
+  console.warn("Firebase init error:", e);
+}
+
+// ══════════════════════════════════════════════════════════════
+// DATA
+// ══════════════════════════════════════════════════════════════
+const EMPLOYEES = [
+  { id: 3, name: "Jade", position: "General Manager", dept: "บริหาร", scheduleIn: "13:00", scheduleOut: "22:00", hours: 9, note: "Flexible" },
+  { id: 6, name: "Taipei", position: "Bar Manager", dept: "ปฏิบัติการ", scheduleIn: "15:00", scheduleOut: "24:00", hours: 9, note: "" },
+  { id: 7, name: "Madun", position: "Barista", dept: "ปฏิบัติการ", scheduleIn: "09:30", scheduleOut: "18:30", hours: 9, note: "" },
+  { id: 8, name: "Bee", position: "Barista", dept: "ปฏิบัติการ", scheduleIn: "09:30", scheduleOut: "18:30", hours: 9, note: "" },
+  { id: 9, name: "Frame", position: "Chef", dept: "ปฏิบัติการ", scheduleIn: "13:00", scheduleOut: "22:00", hours: 9, note: "Flexible" },
+  { id: 10, name: "PP", position: "Cook", dept: "ปฏิบัติการ", scheduleIn: "10:00", scheduleOut: "22:00", hours: 9, note: "สลับกะ", shifts: true },
+  { id: 11, name: "GR", position: "Cook", dept: "ปฏิบัติการ", scheduleIn: "10:00", scheduleOut: "22:00", hours: 9, note: "สลับกะ", shifts: true },
+  { id: 12, name: "Service Team", position: "FOH (Part-time)", dept: "ปฏิบัติการ", scheduleIn: "17:00", scheduleOut: "00:00", hours: null, note: "Flexible" },
+];
+
+const SHIFT_INFO = {
+  1: { label: "กะ 1", detail: "10:00-14:00 + 17:00-22:00", hours: 9, split: true, r1In: "10:00", r1Out: "14:00", r2In: "17:00", r2Out: "22:00", breakHrs: 3 },
+  2: { label: "กะ 2", detail: "14:00-22:00", hours: 8, split: false },
+};
+
+const T = {
+  bg: "#111111", card: "#1c1c1c", accent: "#f59e0b", accentLight: "#fbbf24",
+  green: "#22c55e", red: "#ef4444", purple: "#a78bfa", orange: "#f97316",
+  warm: "#d4a574", warmLight: "#e8c9a0",
+  text: "#e8e8e8", textMuted: "#999999", textDim: "#666666", border: "#2e2e2e",
+};
+
+// ══════════════════════════════════════════════════════════════
+// UTILITIES
+// ══════════════════════════════════════════════════════════════
+const fmt = (d) => d.toLocaleTimeString("th-TH", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+const fmtShort = (d) => d.toLocaleTimeString("th-TH", { hour: "2-digit", minute: "2-digit" });
+const fmtDate = (d) => d.toLocaleDateString("th-TH", { weekday: "short", year: "numeric", month: "short", day: "numeric" });
+const fmtDateFull = (d) => d.toLocaleDateString("th-TH", { weekday: "long", year: "numeric", month: "long", day: "numeric" });
+const getTodayKey = () => new Date().toISOString().slice(0, 10);
+
+function calcDiff(a, b) {
+  if (!a || !b) return null;
+  const ms = new Date(b) - new Date(a);
+  return { hrs: Math.floor(ms / 3600000), mins: Math.floor((ms % 3600000) / 60000), totalMins: Math.floor(ms / 60000) };
+}
+function diffLabel(a, b) { const d = calcDiff(a, b); return d ? `${d.hrs}ชม. ${d.mins}น.` : "—"; }
+
+function isLate(isoStr, scheduleIn) {
+  if (!isoStr || !scheduleIn) return false;
+  const d = new Date(isoStr);
+  const [h, m] = scheduleIn.split(":").map(Number);
+  const sched = new Date(d); sched.setHours(h, m, 0, 0);
+  return d > sched;
+}
+function lateMinutes(isoStr, scheduleIn) {
+  if (!isoStr || !scheduleIn) return 0;
+  const d = new Date(isoStr);
+  const [h, m] = scheduleIn.split(":").map(Number);
+  const sched = new Date(d); sched.setHours(h, m, 0, 0);
+  const diff = Math.floor((d - sched) / 60000);
+  return diff > 0 ? diff : 0;
+}
+
+function getRecordStatus(rec, emp) {
+  if (!rec || !rec.checkIn) return "idle";
+  const isSplit = rec.shift === 1 && emp.shifts;
+  if (isSplit) {
+    if (rec.checkIn2 && rec.checkOut2) return "done";
+    if (rec.checkIn2 && !rec.checkOut2) return "working_r2";
+    if (rec.checkIn && rec.checkOut && !rec.checkIn2) return "on_break";
+    if (rec.checkIn && !rec.checkOut) return "working_r1";
+  } else {
+    if (rec.checkOut) return "done";
+    if (rec.checkIn) return "working";
+  }
+  return "idle";
+}
+
+function totalWorkedMins(rec) {
+  if (!rec) return 0;
+  let total = 0;
+  if (rec.checkIn && rec.checkOut) { const d = calcDiff(rec.checkIn, rec.checkOut); if (d) total += d.totalMins; }
+  if (rec.checkIn2 && rec.checkOut2) { const d = calcDiff(rec.checkIn2, rec.checkOut2); if (d) total += d.totalMins; }
+  return total;
+}
+
+function calcOT(rec, scheduledHours) {
+  if (!rec || scheduledHours == null) return null;
+  const isSplit = rec.shift === 1 && SHIFT_INFO[1].split;
+  if (isSplit) { if (!rec.checkIn || !rec.checkOut || !rec.checkIn2 || !rec.checkOut2) return null; }
+  else { if (!rec.checkIn || !rec.checkOut) return null; }
+  const actualHrs = rec.shift ? (SHIFT_INFO[rec.shift]?.hours || scheduledHours) : scheduledHours;
+  const workedMins = totalWorkedMins(rec);
+  const otMins = workedMins - (actualHrs * 60);
+  return otMins > 0 ? { hrs: Math.floor(otMins / 60), mins: otMins % 60, totalMins: otMins } : null;
+}
+
+// ══════════════════════════════════════════════════════════════
+// FIREBASE HELPERS
+// ══════════════════════════════════════════════════════════════
+function writeRecord(dateKey, empId, data) {
+  if (firebaseReady && db) {
+    db.ref(`records/${dateKey}/${empId}`).update(data);
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
+// COMPONENTS
+// ══════════════════════════════════════════════════════════════
+
+function Clock() {
+  const [now, setNow] = useState(new Date());
+  useEffect(() => { const t = setInterval(() => setNow(new Date()), 1000); return () => clearInterval(t); }, []);
+  return (
+    <div style={{ textAlign: "center", padding: "20px 0 16px" }}>
+      <div style={{ fontSize: "clamp(48px, 12vw, 72px)", fontWeight: 900, color: T.text, fontFamily: "monospace", letterSpacing: "-2px", lineHeight: 1 }}>
+        {fmt(now)}
+      </div>
+      <div style={{ fontSize: "14px", color: T.textMuted, marginTop: "8px" }}>{fmtDateFull(now)}</div>
+    </div>
+  );
+}
+
+function Toast({ toast }) {
+  if (!toast) return null;
+  const colors = { success: T.green, warning: T.accent, error: T.red, info: T.warm };
+  return (
+    <div style={{
+      position: "fixed", top: 16, left: "50%", transform: "translateX(-50%)", zIndex: 9999,
+      padding: "12px 20px", borderRadius: "12px", background: colors[toast.type] || T.green,
+      color: "#fff", fontWeight: 700, fontSize: "14px", boxShadow: `0 8px 32px ${colors[toast.type]}40`,
+      animation: "slideIn 0.3s ease", maxWidth: "90vw", textAlign: "center",
+    }}>
+      {toast.msg}
+    </div>
+  );
+}
+
+// ─── Employee Selector Screen ───
+function EmployeeSelector({ onSelect }) {
+  return (
+    <div style={{ minHeight: "100dvh", background: T.bg, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: "24px" }}>
+      <div style={{ width: 64, height: 64, borderRadius: "20px", background: `linear-gradient(135deg, ${T.accent}, #d97706)`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: "32px", fontWeight: 900, color: "#000", marginBottom: "12px" }}>C</div>
+      <div style={{ fontSize: "22px", fontWeight: 800, color: T.text, marginBottom: "4px" }}>Cannes & Co.</div>
+      <div style={{ fontSize: "13px", color: T.textDim, marginBottom: "28px" }}>เลือกชื่อของคุณเพื่อเข้าสู่ระบบ</div>
+      <div style={{ width: "100%", maxWidth: 400, display: "flex", flexDirection: "column", gap: "8px" }}>
+        {EMPLOYEES.map(emp => (
+          <button key={emp.id} onClick={() => onSelect(emp.id)} style={{
+            display: "flex", alignItems: "center", gap: "14px", padding: "16px",
+            borderRadius: "14px", border: `1px solid ${T.border}`, background: T.card,
+            cursor: "pointer", textAlign: "left", transition: "all 0.15s", width: "100%",
+          }}>
+            <div style={{
+              width: 44, height: 44, borderRadius: "12px",
+              background: emp.dept === "บริหาร" ? `linear-gradient(135deg, ${T.warm}, #8b6d3f)` : `linear-gradient(135deg, ${T.green}, #166534)`,
+              display: "flex", alignItems: "center", justifyContent: "center",
+              fontSize: "18px", fontWeight: 800, color: "#fff", flexShrink: 0,
+            }}>{emp.name[0]}</div>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: "16px", fontWeight: 700, color: T.text }}>{emp.name}</div>
+              <div style={{ fontSize: "12px", color: T.textDim }}>{emp.position}</div>
+            </div>
+            <div style={{ fontSize: "11px", color: T.textMuted, background: T.bg, padding: "4px 10px", borderRadius: "8px" }}>
+              {emp.scheduleIn}–{emp.scheduleOut}
+            </div>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─── Break Countdown ───
+function BreakCountdown({ checkOutR1 }) {
+  const [now, setNow] = useState(new Date());
+  useEffect(() => { const t = setInterval(() => setNow(new Date()), 1000); return () => clearInterval(t); }, []);
+  const outTime = new Date(checkOutR1);
+  const target = new Date(outTime); target.setHours(17, 0, 0, 0);
+  const remaining = target - now;
+  const elapsed = now - outTime;
+  const eMins = Math.max(0, Math.floor(elapsed / 60000));
+  const eH = Math.floor(eMins / 60), eM = eMins % 60;
+  if (remaining <= 0) {
+    return (
+      <div style={{ padding: "14px", borderRadius: "12px", background: "linear-gradient(135deg, #5c4a2e, #8b6d3f)", border: `1px solid ${T.warm}50`, animation: "pulse 2s infinite", marginBottom: "12px" }}>
+        <div style={{ fontSize: "14px", fontWeight: 800, color: "#fff" }}>⏰ ถึงเวลาเข้างานรอบ 2 แล้ว!</div>
+        <div style={{ fontSize: "12px", color: "#d4a574", marginTop: "4px" }}>พักมาแล้ว {eH > 0 ? `${eH}ชม. ` : ""}{eM}น.</div>
+      </div>
+    );
+  }
+  const rMins = Math.floor(remaining / 60000); const rH = Math.floor(rMins / 60), rM = rMins % 60;
+  return (
+    <div style={{ padding: "14px", borderRadius: "12px", background: `${T.warmLight}15`, border: `1px solid ${T.warmLight}30`, marginBottom: "12px" }}>
+      <div style={{ fontSize: "14px", fontWeight: 800, color: T.warmLight }}>☕ พักเบรค</div>
+      <div style={{ fontSize: "12px", color: T.textMuted, marginTop: "4px" }}>พักมาแล้ว {eH > 0 ? `${eH}ชม. ` : ""}{eM}น. — เข้ารอบ 2 อีก {rH > 0 ? `${rH}ชม. ` : ""}{rM}น.</div>
+    </div>
+  );
+}
+
+// ─── My Check-in Card (main employee view) ───
+function MyCheckInCard({ emp, record, onAction, showToast }) {
+  const status = getRecordStatus(record, emp);
+  const isSplit = emp.shifts;
+  const todayKey = getTodayKey();
+  const [note, setNote] = useState(record?.note || "");
+
+  const handleCheckIn = (shift) => {
+    const now = new Date().toISOString();
+    const schedIn = shift === 1 ? SHIFT_INFO[1].r1In : emp.scheduleIn;
+    const late = isLate(now, schedIn);
+    const data = { checkIn: now, checkOut: null, checkIn2: null, checkOut2: null, shift: shift, note: "" };
+    writeRecord(todayKey, emp.id, data);
+    onAction({ ...data, empId: emp.id });
+    const lateMsg = late ? ` (สาย ${lateMinutes(now, schedIn)} นาที)` : "";
+    showToast(`เช็คอินสำเร็จ${shift === 1 ? " — รอบเช้า" : ""}${lateMsg}`, late ? "warning" : "success");
+  };
+
+  const handleCheckOut = () => {
+    const now = new Date().toISOString();
+    if (status === "working" || status === "working_r1") {
+      writeRecord(todayKey, emp.id, { checkOut: now });
+      onAction({ ...record, checkOut: now });
+      if (status === "working_r1") showToast("ออกงานรอบเช้า — พักเบรค ☕ กลับ 17:00", "info");
+      else showToast("เช็คเอาท์สำเร็จ!");
+    } else if (status === "working_r2") {
+      writeRecord(todayKey, emp.id, { checkOut2: now });
+      onAction({ ...record, checkOut2: now });
+      showToast("เช็คเอาท์รอบเย็นสำเร็จ!");
+    }
+  };
+
+  const handleCheckInR2 = () => {
+    const now = new Date().toISOString();
+    const late = isLate(now, SHIFT_INFO[1].r2In);
+    writeRecord(todayKey, emp.id, { checkIn2: now });
+    onAction({ ...record, checkIn2: now });
+    const lateMsg = late ? ` (สาย ${lateMinutes(now, SHIFT_INFO[1].r2In)} นาที)` : "";
+    showToast(`เข้างานรอบเย็น${lateMsg}`, late ? "warning" : "info");
+  };
+
+  const handleNote = (val) => {
+    setNote(val);
+    writeRecord(todayKey, emp.id, { note: val });
+  };
+
+  const worked = totalWorkedMins(record);
+  const ot = status === "done" ? calcOT(record, emp.hours) : null;
+
+  const statusLabels = {
+    idle: { text: "ยังไม่เข้างาน", color: T.textDim, icon: "⏳" },
+    working: { text: "กำลังทำงาน", color: T.green, icon: "🔥" },
+    working_r1: { text: "กำลังทำงาน (R1)", color: T.green, icon: "🔥" },
+    on_break: { text: "พักเบรค", color: T.warmLight, icon: "☕" },
+    working_r2: { text: "กำลังทำงาน (R2)", color: T.green, icon: "🔥" },
+    done: { text: "เสร็จแล้ววันนี้", color: T.purple, icon: "🏠" },
+  };
+  const st = statusLabels[status] || statusLabels.idle;
+
+  return (
+    <div style={{ background: T.card, borderRadius: "20px", padding: "24px", border: `1px solid ${T.border}`, animation: "fadeIn 0.3s ease" }}>
+      {/* Status Badge */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "20px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+          <span style={{ fontSize: "24px" }}>{st.icon}</span>
+          <div>
+            <div style={{ fontSize: "18px", fontWeight: 800, color: st.color }}>{st.text}</div>
+            <div style={{ fontSize: "12px", color: T.textDim }}>
+              {record?.shift ? SHIFT_INFO[record.shift].detail : `${emp.scheduleIn}–${emp.scheduleOut}`}
+            </div>
+          </div>
+        </div>
+        {worked > 0 && (
+          <div style={{ textAlign: "right" }}>
+            <div style={{ fontSize: "24px", fontWeight: 900, color: T.text, fontFamily: "monospace" }}>{Math.floor(worked/60)}:{String(worked%60).padStart(2,"0")}</div>
+            <div style={{ fontSize: "11px", color: T.textDim }}>ชั่วโมงทำงาน</div>
+          </div>
+        )}
+      </div>
+
+      {/* Time entries */}
+      {record?.checkIn && (
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px", marginBottom: "16px" }}>
+          <div style={{ background: T.bg, borderRadius: "12px", padding: "12px" }}>
+            <div style={{ fontSize: "11px", color: T.textDim, marginBottom: "4px" }}>{record?.shift === 1 ? "เข้างาน R1" : "เข้างาน"}</div>
+            <div style={{ fontSize: "18px", fontWeight: 800, color: T.green, fontFamily: "monospace" }}>{fmtShort(new Date(record.checkIn))}</div>
+          </div>
+          <div style={{ background: T.bg, borderRadius: "12px", padding: "12px" }}>
+            <div style={{ fontSize: "11px", color: T.textDim, marginBottom: "4px" }}>{record?.shift === 1 ? "ออกงาน R1" : "ออกงาน"}</div>
+            <div style={{ fontSize: "18px", fontWeight: 800, color: record?.checkOut ? T.red : T.textDim, fontFamily: "monospace" }}>
+              {record?.checkOut ? fmtShort(new Date(record.checkOut)) : "—"}
+            </div>
+          </div>
+          {record?.shift === 1 && (
+            <>
+              <div style={{ background: T.bg, borderRadius: "12px", padding: "12px" }}>
+                <div style={{ fontSize: "11px", color: T.textDim, marginBottom: "4px" }}>เข้างาน R2</div>
+                <div style={{ fontSize: "18px", fontWeight: 800, color: record?.checkIn2 ? T.green : T.textDim, fontFamily: "monospace" }}>
+                  {record?.checkIn2 ? fmtShort(new Date(record.checkIn2)) : "—"}
+                </div>
+              </div>
+              <div style={{ background: T.bg, borderRadius: "12px", padding: "12px" }}>
+                <div style={{ fontSize: "11px", color: T.textDim, marginBottom: "4px" }}>ออกงาน R2</div>
+                <div style={{ fontSize: "18px", fontWeight: 800, color: record?.checkOut2 ? T.red : T.textDim, fontFamily: "monospace" }}>
+                  {record?.checkOut2 ? fmtShort(new Date(record.checkOut2)) : "—"}
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* Break Countdown */}
+      {status === "on_break" && record?.checkOut && <BreakCountdown checkOutR1={record.checkOut} />}
+
+      {/* OT display */}
+      {ot && (
+        <div style={{ background: `${T.orange}15`, borderRadius: "12px", padding: "12px", marginBottom: "16px", border: `1px solid ${T.orange}30` }}>
+          <span style={{ fontSize: "14px", fontWeight: 700, color: T.orange }}>⚡ OT +{ot.hrs}ชม. {ot.mins}น.</span>
+        </div>
+      )}
+
+      {/* ACTION BUTTONS */}
+      {status === "idle" && !isSplit && (
+        <button onClick={() => handleCheckIn(null)} style={{
+          width: "100%", padding: "18px", borderRadius: "16px", border: "none", cursor: "pointer",
+          background: `linear-gradient(135deg, ${T.green}, #166534)`, color: "#fff",
+          fontSize: "18px", fontWeight: 800, letterSpacing: "0.5px",
+        }}>✓ เข้างาน</button>
+      )}
+
+      {status === "idle" && isSplit && (
+        <div style={{ display: "flex", gap: "8px" }}>
+          <button onClick={() => handleCheckIn(1)} style={{
+            flex: 1, padding: "16px", borderRadius: "14px", border: "none", cursor: "pointer",
+            background: `linear-gradient(135deg, ${T.accent}, #d97706)`, color: "#000",
+            fontSize: "15px", fontWeight: 800,
+          }}>กะ 1 (เช้า)</button>
+          <button onClick={() => handleCheckIn(2)} style={{
+            flex: 1, padding: "16px", borderRadius: "14px", border: "none", cursor: "pointer",
+            background: `linear-gradient(135deg, ${T.warm}, #8b6d3f)`, color: "#fff",
+            fontSize: "15px", fontWeight: 800,
+          }}>กะ 2 (บ่าย)</button>
+        </div>
+      )}
+
+      {(status === "working" || status === "working_r1" || status === "working_r2") && (
+        <button onClick={handleCheckOut} style={{
+          width: "100%", padding: "18px", borderRadius: "16px", border: "none", cursor: "pointer",
+          background: `linear-gradient(135deg, ${T.red}, #991b1b)`, color: "#fff",
+          fontSize: "18px", fontWeight: 800,
+        }}>✕ ออกงาน{status === "working_r1" ? " (R1)" : status === "working_r2" ? " (R2)" : ""}</button>
+      )}
+
+      {status === "on_break" && (
+        <button onClick={handleCheckInR2} style={{
+          width: "100%", padding: "18px", borderRadius: "16px", border: "none", cursor: "pointer",
+          background: `linear-gradient(135deg, ${T.accent}, #d97706)`, color: "#000",
+          fontSize: "18px", fontWeight: 800, animation: "pulse 2s infinite",
+        }}>🔥 เข้างานรอบเย็น (R2)</button>
+      )}
+
+      {status === "done" && (
+        <div style={{ textAlign: "center", padding: "14px", background: `${T.purple}15`, borderRadius: "14px", border: `1px solid ${T.purple}30` }}>
+          <div style={{ fontSize: "16px", fontWeight: 800, color: T.purple }}>🏠 เสร็จสิ้นแล้ววันนี้</div>
+          <div style={{ fontSize: "12px", color: T.textMuted, marginTop: "4px" }}>ทำงานรวม {Math.floor(worked/60)} ชม. {worked%60} นาที</div>
+        </div>
+      )}
+
+      {/* Note */}
+      {record?.checkIn && (
+        <textarea value={note} onChange={e => handleNote(e.target.value)}
+          placeholder="โน้ต..." rows={2}
+          style={{
+            width: "100%", marginTop: "12px", padding: "12px", borderRadius: "12px",
+            border: `1px solid ${T.border}`, background: T.bg, color: T.text,
+            fontSize: "14px", resize: "none", outline: "none", fontFamily: "inherit",
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+// ─── Manager: Employee Row ───
+function EmpRow({ emp, record }) {
+  const status = getRecordStatus(record, emp);
+  const worked = totalWorkedMins(record);
+  const st = {
+    idle: { text: "—", color: T.textDim },
+    working: { text: "🔥 ทำงาน", color: T.green },
+    working_r1: { text: "🔥 R1", color: T.green },
+    on_break: { text: "☕ พัก", color: T.warmLight },
+    working_r2: { text: "🔥 R2", color: T.green },
+    done: { text: "🏠 เสร็จ", color: T.purple },
+  }[status] || { text: "—", color: T.textDim };
+
+  const isSplit = record?.shift === 1 && emp.shifts;
+  const schedIn = isSplit ? SHIFT_INFO[1].r1In : emp.scheduleIn;
+  const late = record?.checkIn ? isLate(record.checkIn, schedIn) : false;
+
+  return (
+    <div style={{
+      display: "flex", alignItems: "center", gap: "12px", padding: "14px",
+      background: T.card, borderRadius: "14px", border: `1px solid ${T.border}`,
+    }}>
+      <div style={{
+        width: 40, height: 40, borderRadius: "10px", flexShrink: 0,
+        background: status === "idle" ? T.border : status.includes?.("done") ? `${T.purple}30` : `${T.green}30`,
+        display: "flex", alignItems: "center", justifyContent: "center",
+        fontSize: "16px", fontWeight: 800, color: status === "idle" ? T.textDim : T.text,
+      }}>{emp.name[0]}</div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+          <span style={{ fontSize: "14px", fontWeight: 700, color: T.text }}>{emp.name}</span>
+          {late && <span style={{ fontSize: "10px", background: `${T.red}30`, color: T.red, padding: "2px 6px", borderRadius: "6px", fontWeight: 700 }}>สาย</span>}
+        </div>
+        <div style={{ fontSize: "11px", color: T.textDim, marginTop: "2px" }}>
+          {record?.checkIn ? fmtShort(new Date(record.checkIn)) : "—"}
+          {record?.checkOut ? ` → ${fmtShort(new Date(record.checkOut))}` : ""}
+          {record?.checkIn2 ? ` | ${fmtShort(new Date(record.checkIn2))}` : ""}
+          {record?.checkOut2 ? ` → ${fmtShort(new Date(record.checkOut2))}` : ""}
+        </div>
+      </div>
+      <div style={{ textAlign: "right", flexShrink: 0 }}>
+        <div style={{ fontSize: "12px", fontWeight: 700, color: st.color }}>{st.text}</div>
+        {worked > 0 && <div style={{ fontSize: "11px", color: T.textMuted, fontFamily: "monospace" }}>{Math.floor(worked/60)}:{String(worked%60).padStart(2,"0")}</div>}
+      </div>
+    </div>
+  );
+}
+
+// ─── Firebase Status ───
+function FirebaseStatus() {
+  if (firebaseReady) return null;
+  return (
+    <div style={{
+      background: `${T.red}20`, border: `1px solid ${T.red}40`, borderRadius: "12px",
+      padding: "14px", margin: "0 0 16px", textAlign: "center",
+    }}>
+      <div style={{ fontSize: "14px", fontWeight: 700, color: T.red }}>⚠️ Firebase ยังไม่ได้ตั้งค่า</div>
+      <div style={{ fontSize: "12px", color: T.textMuted, marginTop: "4px" }}>
+        ข้อมูลจะเก็บในเครื่องเท่านั้น — ดู README.md เพื่อตั้งค่า Firebase
+      </div>
+    </div>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════
+// MAIN APP
+// ══════════════════════════════════════════════════════════════
+function App() {
+  const [selectedEmpId, setSelectedEmpId] = useState(() => {
+    const saved = localStorage.getItem("cannes_emp_id");
+    return saved ? parseInt(saved) : null;
+  });
+  const [records, setRecords] = useState({});
+  const [view, setView] = useState("my"); // "my" | "team"
+  const [toast, setToast] = useState(null);
+  const todayKey = getTodayKey();
+
+  const showToast = useCallback((msg, type = "success") => {
+    setToast({ msg, type });
+    setTimeout(() => setToast(null), 3000);
+  }, []);
+
+  // Firebase listener
+  useEffect(() => {
+    if (!firebaseReady || !db) return;
+    const ref = db.ref(`records/${todayKey}`);
+    const handler = ref.on("value", (snap) => {
+      const data = snap.val() || {};
+      // Convert Firebase structure to flat records
+      const flat = {};
+      Object.entries(data).forEach(([empId, rec]) => {
+        flat[`${todayKey}-${empId}`] = { empId: parseInt(empId), ...rec };
+      });
+      setRecords(flat);
+    });
+    return () => ref.off("value", handler);
+  }, [todayKey]);
+
+  const selectEmployee = (id) => {
+    localStorage.setItem("cannes_emp_id", id.toString());
+    setSelectedEmpId(id);
+  };
+
+  const emp = EMPLOYEES.find(e => e.id === selectedEmpId);
+  const myRecord = records[`${todayKey}-${selectedEmpId}`];
+
+  const handleAction = (data) => {
+    setRecords(prev => ({
+      ...prev,
+      [`${todayKey}-${selectedEmpId}`]: { ...prev[`${todayKey}-${selectedEmpId}`], ...data }
+    }));
+  };
+
+  // Stats
+  const stats = useMemo(() => {
+    let checkedIn = 0, working = 0, done = 0, lateCount = 0, onBreak = 0;
+    EMPLOYEES.forEach(e => {
+      const rec = records[`${todayKey}-${e.id}`];
+      const st = getRecordStatus(rec, e);
+      if (rec?.checkIn) {
+        checkedIn++;
+        const isSplit = rec.shift === 1 && e.shifts;
+        if (isLate(rec.checkIn, isSplit ? SHIFT_INFO[1].r1In : e.scheduleIn)) lateCount++;
+      }
+      if (st === "working" || st === "working_r1" || st === "working_r2") working++;
+      if (st === "on_break") onBreak++;
+      if (st === "done") done++;
+    });
+    return { all: EMPLOYEES.length, checkedIn, working, done, lateCount, onBreak };
+  }, [records, todayKey]);
+
+  if (!selectedEmpId) return <EmployeeSelector onSelect={selectEmployee} />;
+
+  return (
+    <div style={{ background: T.bg, minHeight: "100dvh", paddingBottom: "100px" }}>
+      <Toast toast={toast} />
+
+      {/* Header */}
+      <div style={{
+        background: T.bg, borderBottom: `1px solid ${T.border}`, position: "sticky", top: 0, zIndex: 100,
+        padding: "12px 16px", display: "flex", justifyContent: "space-between", alignItems: "center",
+      }}>
+        <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+          <div style={{
+            width: 36, height: 36, borderRadius: "10px",
+            background: `linear-gradient(135deg, ${T.accent}, #d97706)`,
+            display: "flex", alignItems: "center", justifyContent: "center",
+            fontSize: "18px", fontWeight: 900, color: "#000",
+          }}>C</div>
+          <div>
+            <div style={{ fontSize: "15px", fontWeight: 800, color: T.text }}>Cannes & Co.</div>
+            <div style={{ fontSize: "10px", color: T.textDim }}>TIME STAMP</div>
+          </div>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+          <div style={{ textAlign: "right", marginRight: "4px" }}>
+            <div style={{ fontSize: "13px", fontWeight: 700, color: T.accent }}>{emp?.name}</div>
+            <div style={{ fontSize: "10px", color: T.textDim }}>{emp?.position}</div>
+          </div>
+          <button onClick={() => { localStorage.removeItem("cannes_emp_id"); setSelectedEmpId(null); }} style={{
+            width: 32, height: 32, borderRadius: "8px", border: `1px solid ${T.border}`,
+            background: "transparent", color: T.textMuted, fontSize: "14px", cursor: "pointer",
+            display: "flex", alignItems: "center", justifyContent: "center",
+          }}>↩</button>
+        </div>
+      </div>
+
+      <div style={{ maxWidth: 500, margin: "0 auto", padding: "0 16px" }}>
+        <Clock />
+        <FirebaseStatus />
+
+        {/* View Toggle */}
+        <div style={{ display: "flex", gap: "4px", background: T.card, borderRadius: "12px", padding: "4px", border: `1px solid ${T.border}`, marginBottom: "16px" }}>
+          {[{ key: "my", label: "ของฉัน", icon: "👤" }, { key: "team", label: "ทีมทั้งหมด", icon: "👥" }].map(v => (
+            <button key={v.key} onClick={() => setView(v.key)} style={{
+              flex: 1, padding: "10px", borderRadius: "8px", border: "none", cursor: "pointer",
+              background: view === v.key ? T.accent : "transparent",
+              color: view === v.key ? "#000" : T.textMuted,
+              fontWeight: 700, fontSize: "13px", transition: "all 0.2s",
+            }}>{v.icon} {v.label}</button>
+          ))}
+        </div>
+
+        {/* My Check-in */}
+        {view === "my" && emp && (
+          <MyCheckInCard emp={emp} record={myRecord} onAction={handleAction} showToast={showToast} />
+        )}
+
+        {/* Team View */}
+        {view === "team" && (
+          <>
+            {/* Mini Stats */}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: "6px", marginBottom: "16px" }}>
+              {[
+                { label: "เข้างาน", val: stats.checkedIn, color: T.green },
+                { label: "ทำงาน", val: stats.working, color: T.accentLight },
+                { label: "เสร็จ", val: stats.done, color: T.purple },
+                { label: "สาย", val: stats.lateCount, color: T.red },
+              ].map(s => (
+                <div key={s.label} style={{ background: T.card, borderRadius: "12px", padding: "12px", textAlign: "center", border: `1px solid ${T.border}` }}>
+                  <div style={{ fontSize: "22px", fontWeight: 900, color: s.color, fontFamily: "monospace" }}>{s.val}</div>
+                  <div style={{ fontSize: "10px", color: T.textDim, fontWeight: 600, marginTop: "2px" }}>{s.label}</div>
+                </div>
+              ))}
+            </div>
+            {/* Employee List */}
+            <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+              {EMPLOYEES.map(e => (
+                <EmpRow key={e.id} emp={e} record={records[`${todayKey}-${e.id}`]} />
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+</script>
+</body>
+</html>
