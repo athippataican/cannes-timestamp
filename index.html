@@ -220,6 +220,46 @@ function writeEditLog(dateKey, empId, logEntry) {
   }
 }
 
+function writeEditRequest(dateKey, empId, request) {
+  if (firebaseReady && db) {
+    return db.ref(`edit_requests/${dateKey}/${empId}`).push(request);
+  }
+}
+
+function approveEditRequest(dateKey, empId, requestKey, approverEmpId, changes) {
+  if (!firebaseReady || !db) return;
+  // Apply changes to actual record
+  const newData = {};
+  changes.forEach(c => {
+    newData[c.field] = c.newISO;
+  });
+  writeRecord(dateKey, empId, newData);
+  // Update request status
+  db.ref(`edit_requests/${dateKey}/${empId}/${requestKey}`).update({
+    status: "approved",
+    approvedBy: approverEmpId,
+    approvedAt: new Date().toISOString(),
+  });
+  // Also write to edit_logs for history
+  const logEntry = {
+    editedBy: approverEmpId,
+    editedAt: new Date().toISOString(),
+    reason: "อนุมัติแก้ไข",
+    changes: changes.map(c => ({ field: c.field, fieldLabel: c.fieldLabel, oldValue: c.oldValue, newValue: c.newValue })),
+  };
+  writeEditLog(dateKey, empId, logEntry);
+}
+
+function rejectEditRequest(dateKey, empId, requestKey, rejecterEmpId, rejectReason) {
+  if (!firebaseReady || !db) return;
+  db.ref(`edit_requests/${dateKey}/${empId}/${requestKey}`).update({
+    status: "rejected",
+    rejectedBy: rejecterEmpId,
+    rejectedAt: new Date().toISOString(),
+    rejectReason: rejectReason || "",
+  });
+}
+
 function parseTimeToISO(dateKey, timeStr) {
   // timeStr = "HH:MM", returns ISO string for that day+time
   if (!timeStr) return null;
@@ -591,7 +631,7 @@ function EmpRow({ emp, record, onEdit, onViewLog, hasLogs }) {
       <div style={{ display: "flex", gap: "6px", padding: "0 14px 12px", justifyContent: "flex-end" }}>
         {record?.checkIn && (
           <button onClick={() => onEdit(emp)} style={{ ...smallBtn, background: `${T.accent}20`, color: T.accent }}>
-            ✏️ แก้ไข
+            ✏️ ขอแก้ไข
           </button>
         )}
         <button onClick={() => onViewLog(emp)} style={{ ...smallBtn, background: hasLogs ? `${T.warm}20` : `${T.textDim}15`, color: hasLogs ? T.warm : T.textDim }}>
@@ -800,7 +840,6 @@ function EditModal({ emp, record, dateKey, onClose, showToast, editedBy }) {
     setSaving(true);
 
     const changes = [];
-    const newData = {};
 
     // Compare and build change log
     const fields = [
@@ -815,26 +854,30 @@ function EditModal({ emp, record, dateKey, onClose, showToast, editedBy }) {
     fields.forEach(f => {
       const oldTime = isoToTimeStr(f.oldISO);
       if (f.newTime !== oldTime) {
-        changes.push({ field: f.key, fieldLabel: f.label, oldValue: oldTime || "—", newValue: f.newTime || "—" });
-        newData[f.key] = f.newTime ? parseTimeToISO(dateKey, f.newTime) : null;
+        changes.push({
+          field: f.key,
+          fieldLabel: f.label,
+          oldValue: oldTime || "—",
+          newValue: f.newTime || "—",
+          newISO: f.newTime ? parseTimeToISO(dateKey, f.newTime) : null,
+        });
       }
     });
 
     if (changes.length === 0) { showToast("ไม่มีการเปลี่ยนแปลง", "info"); setSaving(false); return; }
 
-    // Write updated record
-    writeRecord(dateKey, emp.id, newData);
-
-    // Write edit log
-    const logEntry = {
-      editedBy: editedBy,
-      editedAt: new Date().toISOString(),
+    // Create pending edit request (NOT direct edit)
+    const request = {
+      requestedBy: editedBy,
+      requestedAt: new Date().toISOString(),
       reason: reason.trim(),
       changes: changes,
+      status: "pending",
+      empName: emp.name,
     };
-    writeEditLog(dateKey, emp.id, logEntry);
+    writeEditRequest(dateKey, emp.id, request);
 
-    showToast(`แก้ไขเวลา ${emp.name} สำเร็จ`, "success");
+    showToast(`ส่งคำขอแก้ไขเวลา ${emp.name} แล้ว — รออนุมัติ`, "info");
     setSaving(false);
     onClose();
   };
@@ -853,7 +896,7 @@ function EditModal({ emp, record, dateKey, onClose, showToast, editedBy }) {
         {/* Header */}
         <div style={{ padding: "20px 20px 0", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div>
-            <div style={{ fontSize: "18px", fontWeight: 800, color: T.text }}>แก้ไขเวลา</div>
+            <div style={{ fontSize: "18px", fontWeight: 800, color: T.text }}>ขอแก้ไขเวลา</div>
             <div style={{ fontSize: "13px", color: T.accent, fontWeight: 700 }}>{emp.name} — {dateKey}</div>
           </div>
           <button onClick={onClose} style={{ width: 32, height: 32, borderRadius: "8px", border: `1px solid ${T.border}`, background: "transparent", color: T.textMuted, fontSize: "18px", cursor: "pointer" }}>✕</button>
@@ -903,7 +946,7 @@ function EditModal({ emp, record, dateKey, onClose, showToast, editedBy }) {
               flex: 1, padding: "14px", borderRadius: "12px", border: "none",
               background: `linear-gradient(135deg, ${T.accent}, #d97706)`, color: "#000",
               fontSize: "15px", fontWeight: 800, cursor: "pointer", opacity: saving ? 0.6 : 1,
-            }}>{saving ? "กำลังบันทึก..." : "บันทึก"}</button>
+            }}>{saving ? "กำลังส่ง..." : "ส่งคำขอ"}</button>
           </div>
         </div>
       </div>
@@ -971,6 +1014,161 @@ function EditLogViewer({ emp, dateKey, onClose }) {
   );
 }
 
+// ─── Pending Edits Panel ───
+function PendingEditsPanel({ dateKey, approverEmpId, showToast, onClose }) {
+  const [requests, setRequests] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [rejectingKey, setRejectingKey] = useState(null);
+  const [rejectReason, setRejectReason] = useState("");
+
+  useEffect(() => {
+    if (!firebaseReady || !db) { setLoading(false); return; }
+    const ref = db.ref(`edit_requests/${dateKey}`);
+    const handler = ref.on("value", (snap) => {
+      const data = snap.val() || {};
+      const arr = [];
+      Object.entries(data).forEach(([empId, reqs]) => {
+        Object.entries(reqs).forEach(([key, req]) => {
+          arr.push({ ...req, empId: parseInt(empId), key, parentEmpId: empId });
+        });
+      });
+      arr.sort((a, b) => new Date(b.requestedAt) - new Date(a.requestedAt));
+      setRequests(arr);
+      setLoading(false);
+    });
+    return () => ref.off("value", handler);
+  }, [dateKey]);
+
+  const handleApprove = (req) => {
+    approveEditRequest(dateKey, req.parentEmpId, req.key, approverEmpId, req.changes);
+    showToast(`อนุมัติแก้ไขเวลา ${req.empName} แล้ว`, "success");
+  };
+
+  const handleReject = (req) => {
+    if (!rejectReason.trim()) { showToast("กรุณาใส่เหตุผลที่ปฏิเสธ", "error"); return; }
+    rejectEditRequest(dateKey, req.parentEmpId, req.key, approverEmpId, rejectReason.trim());
+    showToast(`ปฏิเสธคำขอแก้ไข ${req.empName}`, "warning");
+    setRejectingKey(null);
+    setRejectReason("");
+  };
+
+  const pending = requests.filter(r => r.status === "pending");
+  const handled = requests.filter(r => r.status !== "pending");
+
+  const statusBadge = (status) => {
+    if (status === "approved") return { text: "อนุมัติ", bg: `${T.green}20`, color: T.green, icon: "✓" };
+    if (status === "rejected") return { text: "ปฏิเสธ", bg: `${T.red}20`, color: T.red, icon: "✕" };
+    return { text: "รออนุมัติ", bg: `${T.accent}20`, color: T.accent, icon: "⏳" };
+  };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, zIndex: 10000, background: "rgba(0,0,0,0.7)", display: "flex", alignItems: "center", justifyContent: "center", padding: "16px" }}
+      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div style={{ background: T.card, borderRadius: "20px", width: "100%", maxWidth: 440, maxHeight: "90vh", overflow: "auto", border: `1px solid ${T.border}`, animation: "fadeIn 0.2s ease" }}>
+        <div style={{ padding: "20px 20px 0", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, background: T.card, zIndex: 1, borderRadius: "20px 20px 0 0" }}>
+          <div>
+            <div style={{ fontSize: "18px", fontWeight: 800, color: T.text }}>คำขอแก้ไขเวลา</div>
+            <div style={{ fontSize: "13px", color: T.textDim }}>{dateKey} {pending.length > 0 ? `— ${pending.length} รออนุมัติ` : ""}</div>
+          </div>
+          <button onClick={onClose} style={{ width: 32, height: 32, borderRadius: "8px", border: `1px solid ${T.border}`, background: "transparent", color: T.textMuted, fontSize: "18px", cursor: "pointer" }}>✕</button>
+        </div>
+        <div style={{ padding: "16px 20px 20px" }}>
+          {loading && <div style={{ textAlign: "center", color: T.textDim, padding: "20px" }}>กำลังโหลด...</div>}
+          {!loading && requests.length === 0 && <div style={{ textAlign: "center", color: T.textDim, padding: "20px" }}>ยังไม่มีคำขอแก้ไข</div>}
+
+          {/* Pending requests first */}
+          {pending.map((req) => {
+            const requestedByEmp = EMPLOYEES.find(e => e.id === req.requestedBy);
+            const badge = statusBadge(req.status);
+            return (
+              <div key={req.key} style={{ background: T.bg, borderRadius: "14px", padding: "16px", marginBottom: "10px", border: `1px solid ${T.accent}40` }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px" }}>
+                  <div>
+                    <span style={{ fontSize: "15px", fontWeight: 800, color: T.text }}>{req.empName}</span>
+                    <span style={{ fontSize: "11px", color: T.textDim, marginLeft: "8px" }}>ขอโดย {requestedByEmp?.name || "ไม่ทราบ"}</span>
+                  </div>
+                  <span style={{ fontSize: "11px", background: badge.bg, color: badge.color, padding: "3px 8px", borderRadius: "6px", fontWeight: 700 }}>{badge.icon} {badge.text}</span>
+                </div>
+                {/* Reason */}
+                <div style={{ fontSize: "13px", color: T.text, padding: "8px 10px", background: `${T.warm}10`, borderRadius: "8px", border: `1px solid ${T.warm}20`, marginBottom: "10px" }}>
+                  "{req.reason}"
+                </div>
+                {/* Changes */}
+                {req.changes && req.changes.map((c, j) => (
+                  <div key={j} style={{ fontSize: "12px", color: T.textMuted, display: "flex", gap: "6px", alignItems: "center", marginBottom: "4px" }}>
+                    <span style={{ color: T.textDim, fontWeight: 600 }}>{c.fieldLabel}:</span>
+                    <span style={{ color: T.red, textDecoration: "line-through", fontFamily: "monospace" }}>{c.oldValue}</span>
+                    <span style={{ color: T.textDim }}>→</span>
+                    <span style={{ color: T.green, fontWeight: 700, fontFamily: "monospace" }}>{c.newValue}</span>
+                  </div>
+                ))}
+                <div style={{ fontSize: "11px", color: T.textDim, marginTop: "8px" }}>{new Date(req.requestedAt).toLocaleString("th-TH")}</div>
+
+                {/* Reject reason input */}
+                {rejectingKey === req.key && (
+                  <div style={{ marginTop: "10px" }}>
+                    <input type="text" placeholder="เหตุผลที่ปฏิเสธ..." value={rejectReason} onChange={e => setRejectReason(e.target.value)}
+                      style={{ width: "100%", padding: "10px 12px", borderRadius: "8px", border: `1px solid ${T.border}`, background: T.card, color: T.text, fontSize: "13px", outline: "none" }} />
+                    <div style={{ display: "flex", gap: "6px", marginTop: "6px" }}>
+                      <button onClick={() => { setRejectingKey(null); setRejectReason(""); }} style={{ flex: 1, padding: "8px", borderRadius: "8px", border: `1px solid ${T.border}`, background: "transparent", color: T.textMuted, fontSize: "12px", fontWeight: 700, cursor: "pointer" }}>ยกเลิก</button>
+                      <button onClick={() => handleReject(req)} style={{ flex: 1, padding: "8px", borderRadius: "8px", border: "none", background: T.red, color: "#fff", fontSize: "12px", fontWeight: 700, cursor: "pointer" }}>ยืนยันปฏิเสธ</button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Action buttons */}
+                {rejectingKey !== req.key && (
+                  <div style={{ display: "flex", gap: "8px", marginTop: "12px" }}>
+                    <button onClick={() => { setRejectingKey(req.key); setRejectReason(""); }} style={{
+                      flex: 1, padding: "10px", borderRadius: "10px", border: `1px solid ${T.red}40`,
+                      background: `${T.red}15`, color: T.red, fontSize: "13px", fontWeight: 700, cursor: "pointer",
+                    }}>✕ ปฏิเสธ</button>
+                    <button onClick={() => handleApprove(req)} style={{
+                      flex: 1, padding: "10px", borderRadius: "10px", border: "none",
+                      background: `linear-gradient(135deg, ${T.green}, #166534)`, color: "#fff",
+                      fontSize: "13px", fontWeight: 800, cursor: "pointer",
+                    }}>✓ อนุมัติ</button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+
+          {/* Handled requests */}
+          {handled.length > 0 && pending.length > 0 && (
+            <div style={{ fontSize: "12px", color: T.textDim, fontWeight: 700, margin: "16px 0 8px", borderTop: `1px solid ${T.border}`, paddingTop: "12px" }}>ดำเนินการแล้ว</div>
+          )}
+          {handled.map((req) => {
+            const requestedByEmp = EMPLOYEES.find(e => e.id === req.requestedBy);
+            const badge = statusBadge(req.status);
+            const handledByEmp = EMPLOYEES.find(e => e.id === (req.approvedBy || req.rejectedBy));
+            return (
+              <div key={req.key} style={{ background: T.bg, borderRadius: "12px", padding: "14px", marginBottom: "8px", border: `1px solid ${T.border}`, opacity: 0.7 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
+                  <span style={{ fontSize: "14px", fontWeight: 700, color: T.text }}>{req.empName}</span>
+                  <span style={{ fontSize: "11px", background: badge.bg, color: badge.color, padding: "3px 8px", borderRadius: "6px", fontWeight: 700 }}>{badge.icon} {badge.text}</span>
+                </div>
+                <div style={{ fontSize: "12px", color: T.textDim }}>
+                  ขอโดย {requestedByEmp?.name || "?"} — {badge.text}โดย {handledByEmp?.name || "?"}
+                </div>
+                {req.changes && req.changes.map((c, j) => (
+                  <div key={j} style={{ fontSize: "11px", color: T.textMuted, display: "flex", gap: "4px", alignItems: "center", marginTop: "3px" }}>
+                    <span style={{ fontWeight: 600 }}>{c.fieldLabel}:</span>
+                    <span style={{ textDecoration: "line-through" }}>{c.oldValue}</span>
+                    <span>→</span>
+                    <span style={{ fontWeight: 700 }}>{c.newValue}</span>
+                  </div>
+                ))}
+                {req.rejectReason && <div style={{ fontSize: "11px", color: T.red, marginTop: "4px" }}>เหตุผล: "{req.rejectReason}"</div>}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ══════════════════════════════════════════════════════════════
 // MAIN APP
 // ══════════════════════════════════════════════════════════════
@@ -986,6 +1184,8 @@ function App() {
   const [viewingLogEmp, setViewingLogEmp] = useState(null); // emp object for EditLogViewer
   const [editLogFlags, setEditLogFlags] = useState({}); // { empId: true } if has logs
   const [showChangePin, setShowChangePin] = useState(false);
+  const [showPendingEdits, setShowPendingEdits] = useState(false);
+  const [pendingEditCount, setPendingEditCount] = useState(0);
   const todayKey = getTodayKey();
 
   const showToast = useCallback((msg, type = "success") => {
@@ -1018,6 +1218,23 @@ function App() {
       const flags = {};
       Object.keys(data).forEach(empId => { flags[empId] = true; });
       setEditLogFlags(flags);
+    });
+    return () => ref.off("value", handler);
+  }, [todayKey]);
+
+  // Listen for pending edit requests count
+  useEffect(() => {
+    if (!firebaseReady || !db) return;
+    const ref = db.ref(`edit_requests/${todayKey}`);
+    const handler = ref.on("value", (snap) => {
+      const data = snap.val() || {};
+      let count = 0;
+      Object.values(data).forEach(empReqs => {
+        Object.values(empReqs).forEach(req => {
+          if (req.status === "pending") count++;
+        });
+      });
+      setPendingEditCount(count);
     });
     return () => ref.off("value", handler);
   }, [todayKey]);
@@ -1087,6 +1304,11 @@ function App() {
         <ChangePinModal emp={emp} onClose={() => setShowChangePin(false)} showToast={showToast} />
       )}
 
+      {/* Pending Edits Panel */}
+      {showPendingEdits && (
+        <PendingEditsPanel dateKey={todayKey} approverEmpId={selectedEmpId} showToast={showToast} onClose={() => setShowPendingEdits(false)} />
+      )}
+
       {/* Header */}
       <div style={{
         background: T.bg, borderBottom: `1px solid ${T.border}`, position: "sticky", top: 0, zIndex: 100,
@@ -1109,6 +1331,22 @@ function App() {
             <div style={{ fontSize: "13px", fontWeight: 700, color: T.accent }}>{emp?.name}</div>
             <div style={{ fontSize: "10px", color: T.textDim }}>{emp?.position}</div>
           </div>
+          <button onClick={() => setShowPendingEdits(true)} title="คำขอแก้ไข" style={{
+            width: 32, height: 32, borderRadius: "8px", border: `1px solid ${pendingEditCount > 0 ? T.accent : T.border}`,
+            background: pendingEditCount > 0 ? `${T.accent}20` : "transparent",
+            color: pendingEditCount > 0 ? T.accent : T.textMuted,
+            fontSize: "14px", cursor: "pointer", position: "relative",
+            display: "flex", alignItems: "center", justifyContent: "center",
+          }}>
+            📝
+            {pendingEditCount > 0 && (
+              <span style={{
+                position: "absolute", top: -4, right: -4, width: 18, height: 18,
+                borderRadius: "50%", background: T.red, color: "#fff",
+                fontSize: "10px", fontWeight: 800, display: "flex", alignItems: "center", justifyContent: "center",
+              }}>{pendingEditCount}</span>
+            )}
+          </button>
           <button onClick={() => setShowChangePin(true)} title="เปลี่ยน PIN" style={{
             width: 32, height: 32, borderRadius: "8px", border: `1px solid ${T.border}`,
             background: "transparent", color: T.textMuted, fontSize: "14px", cursor: "pointer",
