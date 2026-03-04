@@ -29,6 +29,9 @@
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-database-compat.js"></script>
 
+<!-- SheetJS for Excel export -->
+<script src="https://cdn.sheetjs.com/xlsx-0.20.1/package/dist/xlsx.full.min.js"></script>
+
 <!-- Babel Standalone for JSX -->
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
@@ -191,6 +194,47 @@ function calcOT(rec, scheduledHours) {
   const workedMins = totalWorkedMins(rec);
   const otMins = workedMins - (actualHrs * 60);
   return otMins > 0 ? { hrs: Math.floor(otMins / 60), mins: otMins % 60, totalMins: otMins } : null;
+}
+
+// ══════════════════════════════════════════════════════════════
+// EXPORT TO EXCEL
+// ══════════════════════════════════════════════════════════════
+function exportToExcel(records, dateKey) {
+  const fmtTime = (iso) => {
+    if (!iso) return "";
+    const d = new Date(iso);
+    return d.toLocaleTimeString("th-TH", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  };
+  const statusTH = { idle: "ยังไม่เข้างาน", working: "กำลังทำงาน", working_r1: "กะ1 ทำงาน", working_r2: "กะ2 ทำงาน", on_break: "พักเบรค", done: "เสร็จแล้ว" };
+  const rows = EMPLOYEES.map(e => {
+    const rec = records[`${dateKey}-${e.id}`];
+    const st = getRecordStatus(rec, e);
+    const isSplit = rec?.shift === 1 && e.shifts;
+    const late = rec?.checkIn ? isLate(rec.checkIn, isSplit ? SHIFT_INFO[1].r1In : e.scheduleIn) : false;
+    const worked = totalWorkedMins(rec);
+    const ot = calcOT(rec, e.hours);
+    return {
+      "ชื่อ": e.name,
+      "ตำแหน่ง": e.position,
+      "แผนก": e.dept,
+      "กะ": isSplit ? `กะ ${rec.shift}` : "-",
+      "เวลาเข้า": fmtTime(rec?.checkIn),
+      "เวลาออก": fmtTime(rec?.checkOut),
+      "เข้า รอบ2": fmtTime(rec?.checkIn2),
+      "ออก รอบ2": fmtTime(rec?.checkOut2),
+      "สถานะ": statusTH[st] || st,
+      "สาย": late ? "สาย" : "",
+      "ชม.ทำงาน": worked > 0 ? `${Math.floor(worked/60)}ชม. ${worked%60}น.` : "",
+      "OT": ot ? `${ot.hrs}ชม. ${ot.mins}น.` : "",
+    };
+  });
+  const ws = XLSX.utils.json_to_sheet(rows);
+  // Auto column widths
+  const colWidths = Object.keys(rows[0]).map(k => ({ wch: Math.max(k.length * 2, ...rows.map(r => (r[k]||"").toString().length * 1.5)) + 2 }));
+  ws["!cols"] = colWidths;
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, dateKey);
+  XLSX.writeFile(wb, `Cannes_TimeStamp_${dateKey}.xlsx`);
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -1430,6 +1474,13 @@ function App() {
                 </div>
               ))}
             </div>
+            {/* Export Button */}
+            <button onClick={() => exportToExcel(records, todayKey)} style={{
+              width: "100%", padding: "12px", borderRadius: "12px", border: `1px solid ${T.green}40`,
+              background: `${T.green}15`, color: T.green, fontSize: "14px", fontWeight: 700,
+              cursor: "pointer", marginBottom: "16px", display: "flex", alignItems: "center", justifyContent: "center", gap: "8px",
+            }}>📊 Export Excel</button>
+
             {/* Employee List */}
             <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
               {EMPLOYEES.map(e => (
