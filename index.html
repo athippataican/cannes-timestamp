@@ -198,6 +198,57 @@ function calcOT(rec, scheduledHours) {
 }
 
 // ══════════════════════════════════════════════════════════════
+// GOOGLE SHEET CONFIG
+// ══════════════════════════════════════════════════════════════
+const GSHEET_URL = "https://script.google.com/macros/s/AKfycbzcTZMrkQNVXD1i9r4nBp2RzEm_qGny6MMwrD_EpgX5uVCgFDZEpPKsKzKPnBhsG2u-/exec";
+const GSHEET_VIEW = "https://docs.google.com/spreadsheets/d/1ItCk8IuK1r2DFGl8uIkjqAGPeMDj7WBUXwFQf9a8wYc";
+
+async function sendToGoogleSheet(rows, sheetName, clear, showToast) {
+  showToast("กำลังส่งข้อมูลไป Google Sheet...", "success");
+  try {
+    const res = await fetch(GSHEET_URL, {
+      method: "POST", mode: "no-cors",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ rows, sheet: sheetName, clear: !!clear }),
+    });
+    showToast("ส่งข้อมูลไป Google Sheet สำเร็จ!", "success");
+  } catch (err) {
+    console.error(err);
+    showToast("เกิดข้อผิดพลาด: " + err.message, "error");
+  }
+}
+
+async function sendTodayToSheet(records, dateKey, showToast) {
+  const dayRecs = {};
+  Object.entries(records).forEach(([k, v]) => { if (k.startsWith(dateKey)) dayRecs[v.empId] = v; });
+  const rows = buildRowsForDay(dateKey, dayRecs);
+  await sendToGoogleSheet(rows, dateKey, true, showToast);
+}
+
+async function sendMonthToSheet(year, month, showToast) {
+  if (!firebaseReady || !db) { showToast("Firebase ยังไม่พร้อม", "error"); return; }
+  const mm = String(month).padStart(2, "0");
+  const prefix = `${year}-${mm}`;
+  showToast("กำลังดึงข้อมูลเดือน...", "success");
+  try {
+    const snap = await db.ref("records").orderByKey().startAt(`${prefix}-01`).endAt(`${prefix}-31`).once("value");
+    const allData = snap.val() || {};
+    const dateKeys = Object.keys(allData).sort();
+    if (!dateKeys.length) { showToast("ไม่พบข้อมูลในเดือนนี้", "error"); return; }
+    const allRows = [];
+    dateKeys.forEach(dk => {
+      const dayData = allData[dk];
+      const dayRecs = {};
+      Object.entries(dayData).forEach(([eid, rec]) => { dayRecs[parseInt(eid)] = { empId: parseInt(eid), ...rec }; });
+      allRows.push(...buildRowsForDay(dk, dayRecs));
+    });
+    await sendToGoogleSheet(allRows, prefix, true, showToast);
+  } catch (err) {
+    showToast("เกิดข้อผิดพลาด: " + err.message, "error");
+  }
+}
+
+// ══════════════════════════════════════════════════════════════
 // EXPORT TO EXCEL
 // ══════════════════════════════════════════════════════════════
 function fmtTimeExport(iso) {
@@ -1580,6 +1631,25 @@ function App() {
                   })()}
                 </select>
               </div>
+            </div>
+
+            {/* Google Sheet Buttons */}
+            <div style={{ display: "flex", gap: "8px", marginBottom: "16px" }}>
+              <button onClick={() => sendTodayToSheet(records, todayKey, showToast)} style={{
+                flex: 1, padding: "12px", borderRadius: "12px", border: "1px solid #4285f440",
+                background: "#4285f415", color: "#4285f4", fontSize: "13px", fontWeight: 700,
+                cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: "6px",
+              }}>📋 วันนี้ → Sheet</button>
+              <button onClick={() => { const now = new Date(); sendMonthToSheet(now.getFullYear(), now.getMonth() + 1, showToast); }} style={{
+                flex: 1, padding: "12px", borderRadius: "12px", border: "1px solid #34a85340",
+                background: "#34a85315", color: "#34a853", fontSize: "13px", fontWeight: 700,
+                cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: "6px",
+              }}>📋 เดือนนี้ → Sheet</button>
+              <button onClick={() => window.open(GSHEET_VIEW, "_blank")} style={{
+                flex: 1, padding: "12px", borderRadius: "12px", border: "1px solid #fbbc0540",
+                background: "#fbbc0515", color: "#fbbc05", fontSize: "13px", fontWeight: 700,
+                cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: "6px",
+              }}>🔗 เปิด Sheet</button>
             </div>
 
             {/* Employee List */}
