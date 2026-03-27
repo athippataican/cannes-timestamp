@@ -200,42 +200,112 @@ function calcOT(rec, scheduledHours) {
 // ══════════════════════════════════════════════════════════════
 // EXPORT TO EXCEL
 // ══════════════════════════════════════════════════════════════
-function exportToExcel(records, dateKey) {
-  const fmtTime = (iso) => {
-    if (!iso) return "";
-    const d = new Date(iso);
-    return d.toLocaleTimeString("th-TH", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-  };
-  const statusTH = { idle: "ยังไม่เข้างาน", working: "กำลังทำงาน", working_r1: "กะ1 ทำงาน", working_r2: "กะ2 ทำงาน", on_break: "พักเบรค", done: "เสร็จแล้ว" };
-  const rows = EMPLOYEES.map(e => {
-    const rec = records[`${dateKey}-${e.id}`];
+function fmtTimeExport(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return d.toLocaleTimeString("th-TH", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+const STATUS_TH = { idle: "ยังไม่เข้างาน", working: "กำลังทำงาน", working_r1: "กะ1 ทำงาน", working_r2: "กะ2 ทำงาน", on_break: "พักเบรค", done: "เสร็จแล้ว" };
+
+function buildRowsForDay(dateKey, dayRecords) {
+  return EMPLOYEES.map(e => {
+    const rec = dayRecords?.[e.id] || null;
     const st = getRecordStatus(rec, e);
     const isSplit = rec?.shift === 1 && e.shifts;
     const late = rec?.checkIn ? isLate(rec.checkIn, isSplit ? SHIFT_INFO[1].r1In : e.scheduleIn) : false;
     const worked = totalWorkedMins(rec);
     const ot = calcOT(rec, e.hours);
     return {
+      "วันที่": dateKey,
       "ชื่อ": e.name,
       "ตำแหน่ง": e.position,
       "แผนก": e.dept,
       "กะ": isSplit ? `กะ ${rec.shift}` : "-",
-      "เวลาเข้า": fmtTime(rec?.checkIn),
-      "เวลาออก": fmtTime(rec?.checkOut),
-      "เข้า รอบ2": fmtTime(rec?.checkIn2),
-      "ออก รอบ2": fmtTime(rec?.checkOut2),
-      "สถานะ": statusTH[st] || st,
+      "เวลาเข้า": fmtTimeExport(rec?.checkIn),
+      "เวลาออก": fmtTimeExport(rec?.checkOut),
+      "เข้า รอบ2": fmtTimeExport(rec?.checkIn2),
+      "ออก รอบ2": fmtTimeExport(rec?.checkOut2),
+      "สถานะ": STATUS_TH[st] || st,
       "สาย": late ? "สาย" : "",
       "ชม.ทำงาน": worked > 0 ? `${Math.floor(worked/60)}ชม. ${worked%60}น.` : "",
       "OT": ot ? `${ot.hrs}ชม. ${ot.mins}น.` : "",
     };
   });
+}
+
+// Export today only (uses in-memory records)
+function exportToday(records, dateKey) {
+  const dayRecs = {};
+  Object.entries(records).forEach(([k, v]) => { if (k.startsWith(dateKey)) dayRecs[v.empId] = v; });
+  const rows = buildRowsForDay(dateKey, dayRecs);
+  if (!rows.length) return;
   const ws = XLSX.utils.json_to_sheet(rows);
-  // Auto column widths
-  const colWidths = Object.keys(rows[0]).map(k => ({ wch: Math.max(k.length * 2, ...rows.map(r => (r[k]||"").toString().length * 1.5)) + 2 }));
-  ws["!cols"] = colWidths;
+  ws["!cols"] = Object.keys(rows[0]).map(k => ({ wch: Math.max(k.length * 2, ...rows.map(r => (r[k]||"").toString().length * 1.5)) + 2 }));
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, dateKey);
   XLSX.writeFile(wb, `Cannes_TimeStamp_${dateKey}.xlsx`);
+}
+
+// Export a whole month from Firebase
+async function exportMonth(year, month, showToast) {
+  if (!firebaseReady || !db) { showToast("Firebase ยังไม่พร้อม", "error"); return; }
+  const mm = String(month).padStart(2, "0");
+  const prefix = `${year}-${mm}`;
+  showToast("กำลังดึงข้อมูล...", "success");
+  try {
+    const snap = await db.ref("records").orderByKey().startAt(`${prefix}-01`).endAt(`${prefix}-31`).once("value");
+    const allData = snap.val() || {};
+    const allRows = [];
+    // Sort date keys
+    const dateKeys = Object.keys(allData).sort();
+    dateKeys.forEach(dk => {
+      const dayData = allData[dk];
+      // Convert empId keys to proper format
+      const dayRecs = {};
+      Object.entries(dayData).forEach(([eid, rec]) => { dayRecs[parseInt(eid)] = { empId: parseInt(eid), ...rec }; });
+      const rows = buildRowsForDay(dk, dayRecs);
+      allRows.push(...rows);
+    });
+    if (!allRows.length) { showToast("ไม่พบข้อมูลในเดือนนี้", "error"); return; }
+    // Summary sheet: total hours per employee
+    const summary = EMPLOYEES.map(e => {
+      let totalMins = 0, lateDays = 0, workDays = 0, otMins = 0;
+      dateKeys.forEach(dk => {
+        const dayData = allData[dk];
+        const rec = dayData?.[e.id] ? { empId: e.id, ...dayData[e.id] } : null;
+        if (rec?.checkIn) {
+          workDays++;
+          totalMins += totalWorkedMins(rec);
+          const isSplit = rec?.shift === 1 && e.shifts;
+          if (isLate(rec.checkIn, isSplit ? SHIFT_INFO[1].r1In : e.scheduleIn)) lateDays++;
+          const ot = calcOT(rec, e.hours);
+          if (ot) otMins += ot.totalMins;
+        }
+      });
+      return {
+        "ชื่อ": e.name,
+        "ตำแหน่ง": e.position,
+        "วันทำงาน": workDays,
+        "รวมชม.": totalMins > 0 ? `${Math.floor(totalMins/60)}ชม. ${totalMins%60}น.` : "0",
+        "รวม OT": otMins > 0 ? `${Math.floor(otMins/60)}ชม. ${otMins%60}น.` : "0",
+        "จำนวนสาย": lateDays,
+      };
+    });
+    const wb = XLSX.utils.book_new();
+    // Summary sheet
+    const wsSummary = XLSX.utils.json_to_sheet(summary);
+    wsSummary["!cols"] = Object.keys(summary[0]).map(k => ({ wch: Math.max(k.length * 2, ...summary.map(r => (r[k]||"").toString().length * 1.5)) + 2 }));
+    XLSX.utils.book_append_sheet(wb, wsSummary, "สรุปรายเดือน");
+    // Detail sheet
+    const wsDetail = XLSX.utils.json_to_sheet(allRows);
+    wsDetail["!cols"] = Object.keys(allRows[0]).map(k => ({ wch: Math.max(k.length * 2, ...allRows.slice(0, 50).map(r => (r[k]||"").toString().length * 1.5)) + 2 }));
+    XLSX.utils.book_append_sheet(wb, wsDetail, "รายละเอียด");
+    XLSX.writeFile(wb, `Cannes_TimeStamp_${prefix}.xlsx`);
+    showToast(`Export เดือน ${prefix} สำเร็จ`, "success");
+  } catch (err) {
+    console.error(err);
+    showToast("เกิดข้อผิดพลาด: " + err.message, "error");
+  }
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -1475,12 +1545,24 @@ function App() {
                 </div>
               ))}
             </div>
-            {/* Export Button */}
-            <button onClick={() => exportToExcel(records, todayKey)} style={{
-              width: "100%", padding: "12px", borderRadius: "12px", border: `1px solid ${T.green}40`,
-              background: `${T.green}15`, color: T.green, fontSize: "14px", fontWeight: 700,
-              cursor: "pointer", marginBottom: "16px", display: "flex", alignItems: "center", justifyContent: "center", gap: "8px",
-            }}>📊 Export Excel</button>
+            {/* Export Buttons */}
+            <div style={{ display: "flex", gap: "8px", marginBottom: "16px" }}>
+              <button onClick={() => exportToday(records, todayKey)} style={{
+                flex: 1, padding: "12px", borderRadius: "12px", border: `1px solid ${T.green}40`,
+                background: `${T.green}15`, color: T.green, fontSize: "13px", fontWeight: 700,
+                cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: "6px",
+              }}>📊 วันนี้</button>
+              <button onClick={() => { const now = new Date(); exportMonth(now.getFullYear(), now.getMonth() + 1, showToast); }} style={{
+                flex: 1, padding: "12px", borderRadius: "12px", border: `1px solid ${T.accent}40`,
+                background: `${T.accent}15`, color: T.accent, fontSize: "13px", fontWeight: 700,
+                cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: "6px",
+              }}>📊 เดือนนี้</button>
+              <button onClick={() => { const now = new Date(); const prev = new Date(now.getFullYear(), now.getMonth() - 1, 1); exportMonth(prev.getFullYear(), prev.getMonth() + 1, showToast); }} style={{
+                flex: 1, padding: "12px", borderRadius: "12px", border: `1px solid ${T.purple}40`,
+                background: `${T.purple}15`, color: T.purple, fontSize: "13px", fontWeight: 700,
+                cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: "6px",
+              }}>📊 เดือนก่อน</button>
+            </div>
 
             {/* Employee List */}
             <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
