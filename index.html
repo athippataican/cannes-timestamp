@@ -1697,6 +1697,29 @@ function App() {
                 background: "#34a85315", color: "#34a853", fontSize: "13px", fontWeight: 700,
                 cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: "6px",
               }}>📋 เดือนนี้ → Sheet</button>
+              <div style={{ flex: 1, position: "relative" }}>
+                <select onChange={(e) => { if (!e.target.value) return; const [y,m] = e.target.value.split("-"); sendMonthToSheet(parseInt(y), parseInt(m), showToast); e.target.value = ""; }}
+                  defaultValue="" style={{
+                  width: "100%", padding: "12px 8px", borderRadius: "12px", border: "1px solid #ea433540",
+                  background: "#ea433515", color: "#ea4335", fontSize: "13px", fontWeight: 700,
+                  cursor: "pointer", textAlign: "center", appearance: "none", WebkitAppearance: "none",
+                  outline: "none",
+                }}>
+                  <option value="" disabled>📋 เลือกเดือน → Sheet</option>
+                  {(() => {
+                    const opts = [];
+                    const now = new Date();
+                    for (let i = 1; i <= 12; i++) {
+                      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+                      const y = d.getFullYear();
+                      const m = d.getMonth() + 1;
+                      const label = d.toLocaleDateString("th-TH", { year: "numeric", month: "long" });
+                      opts.push(<option key={`gs-${y}-${m}`} value={`${y}-${m}`}>{label}</option>);
+                    }
+                    return opts;
+                  })()}
+                </select>
+              </div>
               <button onClick={() => window.open(GSHEET_VIEW, "_blank")} style={{
                 flex: 1, padding: "12px", borderRadius: "12px", border: "1px solid #fbbc0540",
                 background: "#fbbc0515", color: "#fbbc05", fontSize: "13px", fontWeight: 700,
