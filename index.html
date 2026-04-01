@@ -235,14 +235,33 @@ async function sendMonthToSheet(year, month, showToast) {
     const allData = snap.val() || {};
     const dateKeys = Object.keys(allData).sort();
     if (!dateKeys.length) { showToast("ไม่พบข้อมูลในเดือนนี้", "error"); return; }
-    const allRows = [];
-    dateKeys.forEach(dk => {
-      const dayData = allData[dk];
-      const dayRecs = {};
-      Object.entries(dayData).forEach(([eid, rec]) => { dayRecs[parseInt(eid)] = { empId: parseInt(eid), ...rec }; });
-      allRows.push(...buildRowsForDay(dk, dayRecs));
+    // Send summary sheet
+    const summary = EMPLOYEES.map(e => {
+      const pd = buildPersonMonthData(allData, dateKeys, e);
+      return {
+        "ชื่อ": e.name, "ตำแหน่ง": e.position, "วันทำงาน": pd.workDays,
+        "รวมชม.ทำงาน": pd.totalMins > 0 ? `${Math.floor(pd.totalMins/60)}:${String(pd.totalMins%60).padStart(2,"0")}` : "0:00",
+        "รวม OT (นาที)": pd.totalOtMins,
+        "รวม OT": pd.totalOtMins > 0 ? `${Math.floor(pd.totalOtMins/60)}:${String(pd.totalOtMins%60).padStart(2,"0")}` : "0:00",
+        "จำนวนสาย": pd.lateDays,
+      };
     });
-    await sendToGoogleSheet(allRows, prefix, true, showToast);
+    await sendToGoogleSheet(summary, `${prefix} สรุป`, true, showToast);
+    // Send per-person sheets
+    for (const e of EMPLOYEES) {
+      const pd = buildPersonMonthData(allData, dateKeys, e);
+      if (pd.workDays === 0) continue;
+      const rows = [...pd.rows];
+      rows.push({
+        "วันที่": "รวม", "เวลาเข้า": "", "เวลาออก": "", "เข้า รอบ2": "", "ออก รอบ2": "",
+        "สาย": `${pd.lateDays} วัน`,
+        "ชม.ทำงาน": `${Math.floor(pd.totalMins/60)}:${String(pd.totalMins%60).padStart(2,"0")}`,
+        "OT (นาที)": pd.totalOtMins,
+        "OT": pd.totalOtMins > 0 ? `${Math.floor(pd.totalOtMins/60)}:${String(pd.totalOtMins%60).padStart(2,"0")}` : "0:00",
+      });
+      await sendToGoogleSheet(rows, `${prefix} ${e.name}`, true, showToast);
+    }
+    showToast("ส่งข้อมูลรายบุคคลไป Google Sheet สำเร็จ!", "success");
   } catch (err) {
     showToast("เกิดข้อผิดพลาด: " + err.message, "error");
   }
@@ -298,6 +317,38 @@ function exportToday(records, dateKey) {
 }
 
 // Export a whole month from Firebase
+// Build per-person daily rows for a month
+function buildPersonMonthData(allData, dateKeys, emp) {
+  const rows = [];
+  let totalMins = 0, totalOtMins = 0, lateDays = 0, workDays = 0;
+  dateKeys.forEach(dk => {
+    const dayData = allData[dk];
+    const rec = dayData?.[emp.id] ? { empId: emp.id, ...dayData[emp.id] } : null;
+    const isSplit = rec?.shift === 1 && emp.shifts;
+    const late = rec?.checkIn ? isLate(rec.checkIn, isSplit ? SHIFT_INFO[1].r1In : emp.scheduleIn) : false;
+    const worked = totalWorkedMins(rec);
+    const ot = calcOT(rec, emp.hours);
+    if (rec?.checkIn) {
+      workDays++;
+      totalMins += worked;
+      if (late) lateDays++;
+      if (ot) totalOtMins += ot.totalMins;
+    }
+    rows.push({
+      "วันที่": dk,
+      "เวลาเข้า": fmtTimeExport(rec?.checkIn),
+      "เวลาออก": fmtTimeExport(rec?.checkOut),
+      "เข้า รอบ2": fmtTimeExport(rec?.checkIn2),
+      "ออก รอบ2": fmtTimeExport(rec?.checkOut2),
+      "สาย": late ? "สาย" : "",
+      "ชม.ทำงาน": worked > 0 ? `${Math.floor(worked/60)}:${String(worked%60).padStart(2,"0")}` : "",
+      "OT (นาที)": ot ? ot.totalMins : 0,
+      "OT": ot ? `${ot.hrs}:${String(ot.mins).padStart(2,"0")}` : "",
+    });
+  });
+  return { rows, totalMins, totalOtMins, lateDays, workDays };
+}
+
 async function exportMonth(year, month, showToast) {
   if (!firebaseReady || !db) { showToast("Firebase ยังไม่พร้อม", "error"); return; }
   const mm = String(month).padStart(2, "0");
@@ -306,51 +357,52 @@ async function exportMonth(year, month, showToast) {
   try {
     const snap = await db.ref("records").orderByKey().startAt(`${prefix}-01`).endAt(`${prefix}-31`).once("value");
     const allData = snap.val() || {};
-    const allRows = [];
-    // Sort date keys
     const dateKeys = Object.keys(allData).sort();
-    dateKeys.forEach(dk => {
-      const dayData = allData[dk];
-      // Convert empId keys to proper format
-      const dayRecs = {};
-      Object.entries(dayData).forEach(([eid, rec]) => { dayRecs[parseInt(eid)] = { empId: parseInt(eid), ...rec }; });
-      const rows = buildRowsForDay(dk, dayRecs);
-      allRows.push(...rows);
-    });
-    if (!allRows.length) { showToast("ไม่พบข้อมูลในเดือนนี้", "error"); return; }
-    // Summary sheet: total hours per employee
+    if (!dateKeys.length) { showToast("ไม่พบข้อมูลในเดือนนี้", "error"); return; }
+
+    const wb = XLSX.utils.book_new();
+
+    // Summary sheet
     const summary = EMPLOYEES.map(e => {
-      let totalMins = 0, lateDays = 0, workDays = 0, otMins = 0;
-      dateKeys.forEach(dk => {
-        const dayData = allData[dk];
-        const rec = dayData?.[e.id] ? { empId: e.id, ...dayData[e.id] } : null;
-        if (rec?.checkIn) {
-          workDays++;
-          totalMins += totalWorkedMins(rec);
-          const isSplit = rec?.shift === 1 && e.shifts;
-          if (isLate(rec.checkIn, isSplit ? SHIFT_INFO[1].r1In : e.scheduleIn)) lateDays++;
-          const ot = calcOT(rec, e.hours);
-          if (ot) otMins += ot.totalMins;
-        }
-      });
+      const pd = buildPersonMonthData(allData, dateKeys, e);
       return {
         "ชื่อ": e.name,
         "ตำแหน่ง": e.position,
-        "วันทำงาน": workDays,
-        "รวมชม.": totalMins > 0 ? `${Math.floor(totalMins/60)}ชม. ${totalMins%60}น.` : "0",
-        "รวม OT": otMins > 0 ? `${Math.floor(otMins/60)}ชม. ${otMins%60}น.` : "0",
-        "จำนวนสาย": lateDays,
+        "วันทำงาน": pd.workDays,
+        "รวมชม.ทำงาน": pd.totalMins > 0 ? `${Math.floor(pd.totalMins/60)}:${String(pd.totalMins%60).padStart(2,"0")}` : "0:00",
+        "รวม OT (นาที)": pd.totalOtMins,
+        "รวม OT": pd.totalOtMins > 0 ? `${Math.floor(pd.totalOtMins/60)}:${String(pd.totalOtMins%60).padStart(2,"0")}` : "0:00",
+        "จำนวนสาย": pd.lateDays,
       };
     });
-    const wb = XLSX.utils.book_new();
-    // Summary sheet
     const wsSummary = XLSX.utils.json_to_sheet(summary);
     wsSummary["!cols"] = Object.keys(summary[0]).map(k => ({ wch: Math.max(k.length * 2, ...summary.map(r => (r[k]||"").toString().length * 1.5)) + 2 }));
     XLSX.utils.book_append_sheet(wb, wsSummary, "สรุปรายเดือน");
-    // Detail sheet
-    const wsDetail = XLSX.utils.json_to_sheet(allRows);
-    wsDetail["!cols"] = Object.keys(allRows[0]).map(k => ({ wch: Math.max(k.length * 2, ...allRows.slice(0, 50).map(r => (r[k]||"").toString().length * 1.5)) + 2 }));
-    XLSX.utils.book_append_sheet(wb, wsDetail, "รายละเอียด");
+
+    // Per-person sheets
+    EMPLOYEES.forEach(e => {
+      const pd = buildPersonMonthData(allData, dateKeys, e);
+      if (pd.workDays === 0) return; // skip if no records
+      // Add summary row at bottom
+      const rows = [...pd.rows];
+      rows.push({
+        "วันที่": "รวม",
+        "เวลาเข้า": "",
+        "เวลาออก": "",
+        "เข้า รอบ2": "",
+        "ออก รอบ2": "",
+        "สาย": `${pd.lateDays} วัน`,
+        "ชม.ทำงาน": `${Math.floor(pd.totalMins/60)}:${String(pd.totalMins%60).padStart(2,"0")}`,
+        "OT (นาที)": pd.totalOtMins,
+        "OT": pd.totalOtMins > 0 ? `${Math.floor(pd.totalOtMins/60)}:${String(pd.totalOtMins%60).padStart(2,"0")}` : "0:00",
+      });
+      const ws = XLSX.utils.json_to_sheet(rows);
+      ws["!cols"] = Object.keys(rows[0]).map(k => ({ wch: Math.max(k.length * 2, ...rows.slice(0, 20).map(r => (r[k]||"").toString().length * 1.5)) + 2 }));
+      // Sheet name max 31 chars
+      const sheetName = e.name.slice(0, 31);
+      XLSX.utils.book_append_sheet(wb, ws, sheetName);
+    });
+
     XLSX.writeFile(wb, `Cannes_TimeStamp_${prefix}.xlsx`);
     showToast(`Export เดือน ${prefix} สำเร็จ`, "success");
   } catch (err) {
