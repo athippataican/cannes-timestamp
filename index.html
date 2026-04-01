@@ -225,6 +225,7 @@ async function sendTodayToSheet(records, dateKey, showToast) {
   await sendToGoogleSheet(rows, dateKey, true, showToast);
 }
 
+window.sendMonthToSheet = sendMonthToSheet;
 async function sendMonthToSheet(year, month, showToast) {
   if (!firebaseReady || !db) { showToast("Firebase ยังไม่พร้อม", "error"); return; }
   const mm = String(month).padStart(2, "0");
