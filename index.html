@@ -253,18 +253,18 @@ async function sendMonthToSheet(year, month, showToast) {
       const pd = buildPersonMonthData(allData, dateKeys, e);
       if (pd.workDays === 0) continue;
       // Header row for this person
-      allRows.push({ "วันที่": `▸ ${e.name} (${e.position})`, "เวลาเข้า": "", "เวลาออก": "", "เข้า รอบ2": "", "ออก รอบ2": "", "สาย": "", "ชม.ทำงาน": "", "OT (นาที)": "", "OT": "" });
+      allRows.push({ "วันที่": `▸ ${e.name} (${e.position})`, "วัน": "", "เวลาเข้า": "", "เวลาออก": "", "เข้า รอบ2": "", "ออก รอบ2": "", "สาย": "", "ชม.ทำงาน": "", "OT (นาที)": "", "OT": "" });
       pd.rows.forEach(r => allRows.push(r));
       // Totals row
       allRows.push({
-        "วันที่": `รวม ${e.name}`, "เวลาเข้า": "", "เวลาออก": "", "เข้า รอบ2": "", "ออก รอบ2": "",
+        "วันที่": `รวม ${e.name}`, "วัน": "", "เวลาเข้า": "", "เวลาออก": "", "เข้า รอบ2": "", "ออก รอบ2": "",
         "สาย": `${pd.lateDays} วัน`,
         "ชม.ทำงาน": `${Math.floor(pd.totalMins/60)}:${String(pd.totalMins%60).padStart(2,"0")}`,
         "OT (นาที)": pd.totalOtMins,
         "OT": pd.totalOtMins > 0 ? `${Math.floor(pd.totalOtMins/60)}:${String(pd.totalOtMins%60).padStart(2,"0")}` : "0:00",
       });
       // Blank separator row
-      allRows.push({ "วันที่": "", "เวลาเข้า": "", "เวลาออก": "", "เข้า รอบ2": "", "ออก รอบ2": "", "สาย": "", "ชม.ทำงาน": "", "OT (นาที)": "", "OT": "" });
+      allRows.push({ "วันที่": "", "วัน": "", "เวลาเข้า": "", "เวลาออก": "", "เข้า รอบ2": "", "ออก รอบ2": "", "สาย": "", "ชม.ทำงาน": "", "OT (นาที)": "", "OT": "" });
     }
     await sendToGoogleSheet(allRows, prefix, true, showToast);
     showToast("ส่งข้อมูลรายบุคคลไป Google Sheet สำเร็จ!", "success");
@@ -291,8 +291,11 @@ function buildRowsForDay(dateKey, dayRecords) {
     const late = rec?.checkIn ? isLate(rec.checkIn, isSplit ? SHIFT_INFO[1].r1In : e.scheduleIn) : false;
     const worked = totalWorkedMins(rec);
     const ot = calcOT(rec, e.hours);
+    const DAY_NAMES = ["SUN","MON","TUE","WED","THU","FRI","SAT"];
+    const dayName = DAY_NAMES[new Date(dateKey + "T00:00:00").getDay()];
     return {
       "วันที่": dateKey,
+      "วัน": dayName,
       "ชื่อ": e.name,
       "ตำแหน่ง": e.position,
       "แผนก": e.dept,
@@ -340,8 +343,11 @@ function buildPersonMonthData(allData, dateKeys, emp) {
       if (late) lateDays++;
       if (ot) totalOtMins += ot.totalMins;
     }
+    const DAY_NAMES = ["SUN","MON","TUE","WED","THU","FRI","SAT"];
+    const dayName = DAY_NAMES[new Date(dk + "T00:00:00").getDay()];
     rows.push({
       "วันที่": dk,
+      "วัน": dayName,
       "เวลาเข้า": fmtTimeExport(rec?.checkIn),
       "เวลาออก": fmtTimeExport(rec?.checkOut),
       "เข้า รอบ2": fmtTimeExport(rec?.checkIn2),
