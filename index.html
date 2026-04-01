@@ -247,20 +247,26 @@ async function sendMonthToSheet(year, month, showToast) {
       };
     });
     await sendToGoogleSheet(summary, `${prefix} สรุป`, true, showToast);
-    // Send per-person sheets
+    // Send all persons grouped into one sheet
+    const allRows = [];
     for (const e of EMPLOYEES) {
       const pd = buildPersonMonthData(allData, dateKeys, e);
       if (pd.workDays === 0) continue;
-      const rows = [...pd.rows];
-      rows.push({
-        "วันที่": "รวม", "เวลาเข้า": "", "เวลาออก": "", "เข้า รอบ2": "", "ออก รอบ2": "",
+      // Header row for this person
+      allRows.push({ "วันที่": `▸ ${e.name} (${e.position})`, "เวลาเข้า": "", "เวลาออก": "", "เข้า รอบ2": "", "ออก รอบ2": "", "สาย": "", "ชม.ทำงาน": "", "OT (นาที)": "", "OT": "" });
+      pd.rows.forEach(r => allRows.push(r));
+      // Totals row
+      allRows.push({
+        "วันที่": `รวม ${e.name}`, "เวลาเข้า": "", "เวลาออก": "", "เข้า รอบ2": "", "ออก รอบ2": "",
         "สาย": `${pd.lateDays} วัน`,
         "ชม.ทำงาน": `${Math.floor(pd.totalMins/60)}:${String(pd.totalMins%60).padStart(2,"0")}`,
         "OT (นาที)": pd.totalOtMins,
         "OT": pd.totalOtMins > 0 ? `${Math.floor(pd.totalOtMins/60)}:${String(pd.totalOtMins%60).padStart(2,"0")}` : "0:00",
       });
-      await sendToGoogleSheet(rows, `${prefix} ${e.name}`, true, showToast);
+      // Blank separator row
+      allRows.push({ "วันที่": "", "เวลาเข้า": "", "เวลาออก": "", "เข้า รอบ2": "", "ออก รอบ2": "", "สาย": "", "ชม.ทำงาน": "", "OT (นาที)": "", "OT": "" });
     }
+    await sendToGoogleSheet(allRows, prefix, true, showToast);
     showToast("ส่งข้อมูลรายบุคคลไป Google Sheet สำเร็จ!", "success");
   } catch (err) {
     showToast("เกิดข้อผิดพลาด: " + err.message, "error");
