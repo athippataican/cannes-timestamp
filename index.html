@@ -263,8 +263,8 @@ async function sendMonthToSheet(year, month, showToast) {
         "OT (นาที)": pd.totalOtMins,
         "OT": pd.totalOtMins > 0 ? `${Math.floor(pd.totalOtMins/60)}:${String(pd.totalOtMins%60).padStart(2,"0")}` : "0:00",
       });
-      // Blank separator rows (2 empty rows between persons)
-      const blankRow = () => ({ "วันที่": "", "วัน": "", "เวลาเข้า": "", "เวลาออก": "", "เข้า รอบ2": "", "ออก รอบ2": "", "สาย": "", "ชม.ทำงาน": "", "OT (นาที)": "", "OT": "" });
+      // Blank separator rows (use space char so Google Sheets doesn't skip them)
+      const blankRow = () => ({ "วันที่": " ", "วัน": "", "เวลาเข้า": "", "เวลาออก": "", "เข้า รอบ2": "", "ออก รอบ2": "", "สาย": "", "ชม.ทำงาน": "", "OT (นาที)": "", "OT": "" });
       allRows.push(blankRow(), blankRow());
     }
     await sendToGoogleSheet(allRows, prefix, true, showToast);
