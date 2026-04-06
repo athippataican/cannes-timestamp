@@ -253,7 +253,7 @@ async function sendMonthToSheet(year, month, showToast) {
       const pd = buildPersonMonthData(allData, dateKeys, e);
       if (pd.workDays === 0) continue;
       // Header row for this person
-      allRows.push({ "วันที่": `▸ ${e.name} (${e.position})`, "วัน": "", "เวลาเข้า": "", "เวลาออก": "", "เข้า รอบ2": "", "ออก รอบ2": "", "สาย": "", "ชม.ทำงาน": "", "OT (นาที)": "", "OT": "" });
+      allRows.push({ "วันที่": `▸ ${e.name} (${e.position})`, "วัน": "", "เวลาเข้า": "", "เวลาออก": "", "เข้า รอบ2": "", "ออก รอบ2": "", "สาย": "", "ชม.ทำงาน": "", "OT (นาที)": "", "OT": "", "หมายเหตุ": "" });
       pd.rows.forEach(r => allRows.push(r));
       // Totals row
       allRows.push({
@@ -262,9 +262,10 @@ async function sendMonthToSheet(year, month, showToast) {
         "ชม.ทำงาน": `${Math.floor(pd.totalMins/60)}:${String(pd.totalMins%60).padStart(2,"0")}`,
         "OT (นาที)": pd.totalOtMins,
         "OT": pd.totalOtMins > 0 ? `${Math.floor(pd.totalOtMins/60)}:${String(pd.totalOtMins%60).padStart(2,"0")}` : "0:00",
+        "หมายเหตุ": "",
       });
       // Blank separator rows (use space char so Google Sheets doesn't skip them)
-      const blankRow = () => ({ "วันที่": " ", "วัน": "", "เวลาเข้า": "", "เวลาออก": "", "เข้า รอบ2": "", "ออก รอบ2": "", "สาย": "", "ชม.ทำงาน": "", "OT (นาที)": "", "OT": "" });
+      const blankRow = () => ({ "วันที่": " ", "วัน": "", "เวลาเข้า": "", "เวลาออก": "", "เข้า รอบ2": "", "ออก รอบ2": "", "สาย": "", "ชม.ทำงาน": "", "OT (นาที)": "", "OT": "", "หมายเหตุ": "" });
       allRows.push(blankRow(), blankRow());
     }
     await sendToGoogleSheet(allRows, prefix, true, showToast);
@@ -311,6 +312,7 @@ function buildRowsForDay(dateKey, dayRecords) {
       "สาย": late ? "สาย" : "",
       "ชม.ทำงาน": worked > 0 ? `${Math.floor(worked/60)}ชม. ${worked%60}น.` : "",
       "OT": ot ? `${ot.hrs}ชม. ${ot.mins}น.` : "",
+      "หมายเหตุ": rec?.note || "",
     };
   });
 }
@@ -359,6 +361,7 @@ function buildPersonMonthData(allData, dateKeys, emp) {
       "ชม.ทำงาน": worked > 0 ? `${Math.floor(worked/60)}:${String(worked%60).padStart(2,"0")}` : "",
       "OT (นาที)": ot ? ot.totalMins : 0,
       "OT": ot ? `${ot.hrs}:${String(ot.mins).padStart(2,"0")}` : "",
+      "หมายเหตุ": rec?.note || "",
     });
   });
   return { rows, totalMins, totalOtMins, lateDays, workDays };
