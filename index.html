@@ -1668,11 +1668,6 @@ function App() {
             </div>
             {/* Export Buttons */}
             <div style={{ display: "flex", gap: "8px", marginBottom: "16px" }}>
-              <button onClick={() => exportToday(records, todayKey)} style={{
-                flex: 1, padding: "12px", borderRadius: "12px", border: `1px solid ${T.green}40`,
-                background: `${T.green}15`, color: T.green, fontSize: "13px", fontWeight: 700,
-                cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: "6px",
-              }}>📊 วันนี้</button>
               <button onClick={() => { const now = new Date(); exportMonth(now.getFullYear(), now.getMonth() + 1, showToast); }} style={{
                 flex: 1, padding: "12px", borderRadius: "12px", border: `1px solid ${T.accent}40`,
                 background: `${T.accent}15`, color: T.accent, fontSize: "13px", fontWeight: 700,
@@ -1705,11 +1700,6 @@ function App() {
 
             {/* Google Sheet Buttons */}
             <div style={{ display: "flex", gap: "8px", marginBottom: "16px" }}>
-              <button onClick={() => sendTodayToSheet(records, todayKey, showToast)} style={{
-                flex: 1, padding: "12px", borderRadius: "12px", border: "1px solid #4285f440",
-                background: "#4285f415", color: "#4285f4", fontSize: "13px", fontWeight: 700,
-                cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: "6px",
-              }}>📋 วันนี้ → Sheet</button>
               <button onClick={() => { const now = new Date(); sendMonthToSheet(now.getFullYear(), now.getMonth() + 1, showToast); }} style={{
                 flex: 1, padding: "12px", borderRadius: "12px", border: "1px solid #34a85340",
                 background: "#34a85315", color: "#34a853", fontSize: "13px", fontWeight: 700,
